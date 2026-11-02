@@ -1,0 +1,39 @@
+#!/bin/bash
+set -eu
+apt-get update -y
+DEBIAN_FRONTEND=noninteractive apt-get install -y redis-tools
+
+# Non-secret connection settings for every shell
+cat > /etc/profile.d/redis.sh <<'ENVEOF'
+export REDIS_HOST="${redis_host}"
+export REDIS_PORT="${redis_port}"
+ENVEOF
+
+# Smoke test: asks for the token, never stores it
+cat > /usr/local/bin/redis-smoke-test <<'TESTEOF'
+#!/bin/bash
+set -u
+HOST="${redis_host}"
+PORT="${redis_port}"
+
+read -rsp "Redis auth token: " TOKEN; echo
+export REDISCLI_AUTH="$TOKEN"
+CLI="redis-cli --tls -h $HOST -p $PORT"
+
+echo "== PING";               $CLI PING
+echo "== SET / GET";          $CLI SET greeting hello; $CLI GET greeting
+echo "== INCR twice";         $CLI INCR counter; $CLI INCR counter
+echo "== DEL";                $CLI DEL greeting; $CLI GET greeting
+echo "== Hit and miss counters"; $CLI INFO stats | grep -E 'keyspace_(hits|misses)'
+echo "== Persistence settings";  $CLI INFO persistence | grep -E 'rdb_last_save_time|aof_enabled'
+
+echo "== Negative test: no TLS (expected to fail)"
+unset REDISCLI_AUTH
+timeout 5 redis-cli -h $HOST -p $PORT PING || echo "failed as expected"
+
+echo "== Negative test: TLS but no password (expected NOAUTH)"
+redis-cli --tls -h $HOST -p $PORT PING
+
+unset TOKEN
+TESTEOF
+chmod +x /usr/local/bin/redis-smoke-test
